@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Iterator
+from enum import Enum
 
 from .config import GatewayConfig
 from .decode import checksum_ok
+
+
+class DropReason(str, Enum):
+    """Why a frame did not reach the store.
+
+    Discarded telemetry has to be accountable: an operator must be able to say
+    why any gap in the record exists, not merely that one does.
+    """
+
+    DUPLICATE = "duplicate"
+    CHECKSUM = "checksum"
+    QUEUE_FULL = "queue_full"
 
 
 class FrameQueue:
@@ -18,6 +31,7 @@ class FrameQueue:
         self._seen: set[bytes] = set()
         self.dropped = 0
         self.rejected = 0
+        self.drops: Counter[DropReason] = Counter()
 
     def offer(self, frame: bytes) -> bool:
         """Accept *frame*; return False if it was rejected.
@@ -27,12 +41,15 @@ class FrameQueue:
         frames never reach the store.
         """
         if frame in self._seen:
+            self.drops[DropReason.DUPLICATE] += 1
             return False
         if self._config.strict_checksums and not checksum_ok(frame):
             self.rejected += 1
+            self.drops[DropReason.CHECKSUM] += 1
             return False
         if len(self._frames) == self._frames.maxlen:
             self.dropped += 1
+            self.drops[DropReason.QUEUE_FULL] += 1
         self._seen.add(frame)
         self._frames.append(frame)
         return True
@@ -43,3 +60,11 @@ class FrameQueue:
 
     def __len__(self) -> int:
         return len(self._frames)
+
+    def drop_report(self) -> dict[str, int]:
+        """Every drop reason and its count, including reasons not yet seen.
+
+        Reporting zeroes matters: a missing key reads as "not measured", a zero
+        reads as "measured, none occurred".
+        """
+        return {reason.value: self.drops[reason] for reason in DropReason}

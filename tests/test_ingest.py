@@ -34,3 +34,19 @@ def test_valid_frames_pass_strict_mode():
     queue = FrameQueue(GatewayConfig(strict_checksums=True))
     assert queue.offer(checked(b"\x00\x42\x00\x00\x00\x00\x00\x01")) is True
     assert queue.rejected == 0
+
+
+def test_drop_report_accounts_for_every_reason():
+    queue = FrameQueue(GatewayConfig(queue_depth=1, strict_checksums=False))
+    queue.offer(b"a")
+    queue.offer(b"a")
+    queue.offer(b"b")
+    report = queue.drop_report()
+    assert report["duplicate"] == 1
+    assert report["queue_full"] == 1
+    assert report["checksum"] == 0
+
+
+def test_drop_report_lists_unseen_reasons_as_zero():
+    queue = FrameQueue(GatewayConfig(strict_checksums=False))
+    assert queue.drop_report() == {"duplicate": 0, "checksum": 0, "queue_full": 0}
