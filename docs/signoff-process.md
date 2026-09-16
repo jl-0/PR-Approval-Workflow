@@ -59,15 +59,33 @@ enough; that is not consensus logic.
 Turn on *Prevent self-review* if the person who triggered the run must not be
 able to approve their own batch.
 
-## The AI summary
+## The summary at the top of the report
 
-The report includes a short narrative written by GitHub Models, called with the
-workflow's built-in token. It is free on public repositories and needs no API key
-or billing setup — only `models: read` in the job's permissions.
+Every report opens with a short bulleted overview: how much merged, what needs a
+closer look, what the batch consists of, and which pull requests closed no
+tracked work item. That last point is the traceability question an assessor
+asks, so it is stated rather than left to be noticed.
 
-It is rate-limited, so the step is `continue-on-error`. If the model is
-unavailable the narrative is simply omitted; the tables come straight from
-GitHub's API and are complete without it.
+This is derived directly from the pull request data — no model, no network, no
+cost, nothing to configure. It is always present.
+
+### Turning on a written summary (optional)
+
+A model can write that overview in prose instead.
+
+The free option is gone: **GitHub Models was retired on 30 July 2026**, taking
+the free `models: read` inference endpoint with it. Its replacement is Copilot
+CLI, which needs a token belonging to an account with Copilot access.
+
+To enable it, add a repository secret named `COPILOT_PAT` holding a personal
+access token for an account with Copilot. The workflow detects the secret and
+uses it; with no secret, the steps are skipped entirely and the derived summary
+is used instead.
+
+Both the Copilot step and its install step are `continue-on-error`, and the
+report labels which kind of summary it carries. A quota exhaustion or an outage
+degrades the wording of one paragraph — it never blocks a sign-off, and the
+tables come straight from GitHub's API either way.
 
 ## Optionally: blocking merges on sign-off
 

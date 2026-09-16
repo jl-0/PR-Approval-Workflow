@@ -38,7 +38,6 @@ jobs:
       contents: read        # read code and sign-off tags
       pull-requests: read   # list merged PRs and their labels
       issues: read          # read labels on the issues those PRs closed
-      models: read          # free GitHub Models inference for the summary
     outputs:
       pr_count: ${{ steps.collect.outputs.pr_count }}
       window_start: ${{ steps.window.outputs.since }}
@@ -80,24 +79,42 @@ jobs:
           count="$(python3 -c "import json;print(len(json.load(open('build/prs.json'))['pull_requests']))")"
           echo "pr_count=$count" >> "$GITHUB_OUTPUT"
 
-      - name: Write the summary brief
+      - name: Decide whether to ask a model for a summary
         id: brief
+        env:
+          # Referenced here rather than in each step's `if`, where step-level env
+          # is not dependably in scope.
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
         run: |
-          # Non-empty batches get a narrative; an empty one needs no model call.
-          if [ "${{ steps.collect.outputs.pr_count }}" -gt 0 ]; then
-            echo "needed=true" >> "$GITHUB_OUTPUT"
+          # An empty batch needs no narrative, and without a token we cannot ask
+          # for one. Either way the report still renders.
+          if [ "${{ steps.collect.outputs.pr_count }}" -gt 0 ] && [ -n "$COPILOT_PAT" ]; then
+            echo "ask_model=true" >> "$GITHUB_OUTPUT"
           else
-            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "ask_model=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Summarise the batch with GitHub Models
+      # GitHub Models was retired on 30 July 2026, so the free inference endpoint
+      # is gone. Copilot CLI replaced it, and it needs a token with Copilot access.
+      # The whole block is therefore optional: without the secret the report ships
+      # with a narrative derived from the data itself, which costs nothing and
+      # needs no network. Add COPILOT_PAT to turn the written summary on.
+      - name: Install Copilot CLI
+        if: steps.brief.outputs.ask_model == 'true'
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+        continue-on-error: true
+        run: npm install -g @github/copilot
+
+      - name: Summarise the batch with Copilot
         id: ai
-        if: steps.brief.outputs.needed == 'true'
-        continue-on-error: true   # rate limits must never block the sign-off
-        uses: actions/ai-inference@v1
+        if: steps.brief.outputs.ask_model == 'true'
+        continue-on-error: true   # a quota or outage must never block the sign-off
+        uses: actions/ai-inference@v3
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
         with:
-          model: openai/gpt-4o-mini
-          max-tokens: 500
+          model: gpt-4.1
           system-prompt: >-
             You write change summaries for a manager who approves releases but does
             not read code. Given a list of merged pull requests, reply with three to
@@ -123,11 +140,13 @@ jobs:
             rm -f build/narrative.md
           fi
 
-      - name: Note that the summary was unavailable
-        if: steps.brief.outputs.needed == 'true' && hashFiles('build/narrative.md') == ''
+      - name: Note which summary the report will carry
         run: |
-          echo "::notice::GitHub Models produced no summary for this run (most likely a rate limit)."
-          echo "The tables are generated directly from GitHub and are complete without it."
+          if [ -s build/narrative.md ]; then
+            echo "::notice::Report carries a Copilot-written summary."
+          else
+            echo "::notice::No Copilot summary for this run; the report carries a summary derived from the data itself, and the tables are complete either way."
+          fi
 
       - name: Render the report
         run: |

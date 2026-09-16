@@ -15,7 +15,8 @@ named measurands, and serves the latest values over a read-only HTTP API.
 | `src/aurora/decode.py` | Frame → measurand decoding |
 | `src/aurora/api.py` | Read-only query surface |
 | `src/aurora/config.py` | Runtime configuration |
-| `scripts/` | Sign-off report generation |
+| `scripts/collect_prs.py` | Gathers merged PRs, their labels, and linked issues |
+| `scripts/render_report.py` | Renders the report as Markdown and as a web page |
 | `tests/` | Unit tests |
 
 ## Development

@@ -18,6 +18,19 @@ from datetime import datetime
 # Labels that should stand out to a reviewer skimming the table.
 NOTABLE = {"security", "compliance", "breaking-change", "data-loss-risk"}
 
+# Label -> how to describe it to someone who does not read code. Order matters:
+# the first match wins, so the most consequential categories come first.
+CATEGORIES = [
+    ("security", "security"),
+    ("compliance", "audit and compliance"),
+    ("breaking-change", "behaviour changes"),
+    ("bug", "defect fixes"),
+    ("enhancement", "new capability"),
+    ("performance", "performance"),
+    ("documentation", "documentation"),
+    ("tech-debt", "internal cleanup"),
+]
+
 
 def read_json(path: str) -> dict:
     return json.loads(pathlib.Path(path).read_text())
@@ -47,6 +60,73 @@ def all_labels(pr: dict) -> list[dict]:
     return [seen[name] for name in sorted(seen)]
 
 
+def plural(count: int, singular: str, plural_form: str | None = None) -> str:
+    return singular if count == 1 else (plural_form or singular + "s")
+
+
+def categorise(pr: dict) -> str | None:
+    """Assign *pr* to the most consequential category its labels imply."""
+    names = {label["name"] for label in all_labels(pr)}
+    for label, description in CATEGORIES:
+        if label in names:
+            return description
+    return None
+
+
+def auto_narrative(payload: dict) -> str:
+    """Describe the batch in prose derived entirely from the data.
+
+    This runs with no model and no network, so the report always carries a
+    readable overview. An AI summary, when one is configured, replaces it.
+    """
+    prs = payload["pull_requests"]
+    if not prs:
+        return ""
+
+    issues = [issue for pr in prs for issue in pr["issues"]]
+    authors = sorted({pr["author"] for pr in prs})
+    bullets = [
+        f"- {len(prs)} {plural(len(prs), 'pull request')} merged in this window, "
+        f"closing {len(issues)} tracked {plural(len(issues), 'work item')}, "
+        f"from {len(authors)} {plural(len(authors), 'contributor')} "
+        f"({', '.join(authors)})."
+    ]
+
+    flagged = [pr for pr in prs if NOTABLE & {l["name"] for l in all_labels(pr)}]
+    if flagged:
+        listed = "; ".join(
+            f"#{pr['number']} {pr['title']}"
+            + f" ({', '.join(sorted(NOTABLE & {l['name'] for l in all_labels(pr)}))})"
+            for pr in flagged
+        )
+        bullets.append(
+            f"- Needs a closer look: {listed}."
+        )
+
+    grouped: dict[str, list[int]] = {}
+    for pr in prs:
+        description = categorise(pr)
+        if description:
+            grouped.setdefault(description, []).append(pr["number"])
+    if grouped:
+        listed = "; ".join(
+            f"{description} ({', '.join(f'#{n}' for n in numbers)})"
+            for description, numbers in grouped.items()
+        )
+        bullets.append(f"- What the batch consists of: {listed}.")
+
+    untracked = [pr for pr in prs if not pr["issues"]]
+    if untracked:
+        listed = ", ".join(f"#{pr['number']}" for pr in untracked)
+        bullets.append(
+            f"- {len(untracked)} {plural(len(untracked), 'pull request')} "
+            f"closed no tracked work item ({listed}), leaving no issue history "
+            "behind those changes."
+        )
+
+    return "\n".join(bullets)
+
+
 def label_counts(payload: dict) -> Counter:
     counter: Counter = Counter()
     for pr in payload["pull_requests"]:
@@ -59,7 +139,9 @@ def label_counts(payload: dict) -> Counter:
 # Markdown (GitHub Actions job summary)
 # --------------------------------------------------------------------------- #
 
-def render_markdown(payload: dict, narrative: str, page_url: str | None) -> str:
+def render_markdown(
+    payload: dict, narrative: str, page_url: str | None, ai: bool
+) -> str:
     prs = payload["pull_requests"]
     lines = [
         "# Change sign-off request",
@@ -78,7 +160,12 @@ def render_markdown(payload: dict, narrative: str, page_url: str | None) -> str:
         lines += [f"📄 **[Open the full report page]({page_url})**", ""]
 
     if narrative:
-        lines += ["## Summary", "", narrative, ""]
+        origin = (
+            "Written by GitHub Copilot from the changes below."
+            if ai
+            else "Derived from the tables below."
+        )
+        lines += ["## Summary", "", narrative, "", f"<sub>{origin}</sub>", ""]
 
     if not prs:
         lines += [
@@ -242,7 +329,9 @@ def markdown_lite(text: str) -> str:
     return "\n".join(out)
 
 
-def render_html(payload: dict, narrative: str, run_url: str | None) -> str:
+def render_html(
+    payload: dict, narrative: str, run_url: str | None, ai: bool
+) -> str:
     prs = payload["pull_requests"]
     counts = label_counts(payload)
     issue_count = sum(len(pr["issues"]) for pr in prs)
@@ -271,9 +360,15 @@ def render_html(payload: dict, narrative: str, run_url: str | None) -> str:
     ]
 
     if narrative:
+        origin = (
+            "Written by GitHub Copilot from the changes below."
+            if ai
+            else "Derived from the tables below."
+        )
         parts += [
             "<h2>Summary</h2>",
-            f"<div class='summary'>{markdown_lite(narrative)}</div>",
+            f"<div class='summary'>{markdown_lite(narrative)}"
+            f"<p class='meta'>{origin}</p></div>",
         ]
 
     if not prs:
@@ -367,14 +462,17 @@ def main() -> int:
 
     payload = read_json(args.data)
     narrative = read_optional(args.narrative)
+    from_ai = bool(narrative)
+    if not narrative:
+        narrative = auto_narrative(payload)
 
     md_path = pathlib.Path(args.markdown_out)
     md_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(render_markdown(payload, narrative, args.page_url))
+    md_path.write_text(render_markdown(payload, narrative, args.page_url, from_ai))
 
     html_path = pathlib.Path(args.html_out)
     html_path.parent.mkdir(parents=True, exist_ok=True)
-    html_path.write_text(render_html(payload, narrative, args.run_url))
+    html_path.write_text(render_html(payload, narrative, args.run_url, from_ai))
 
     print(f"wrote {md_path} and {html_path}")
     return 0
