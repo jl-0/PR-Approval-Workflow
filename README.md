@@ -4,7 +4,7 @@ A small demo service that ingests spacecraft telemetry frames, decodes them into
 named measurands, and serves the latest values over a read-only HTTP API.
 
 > **Note:** this repository is a sandbox for testing a manager sign-off workflow.
-> The code is synthetic. The interesting part is [`.github/workflows/release-signoff.yml`](.github/workflows/release-signoff.yml)
+> The code is synthetic. The interesting part is [`.github/workflows/batch-signoff.yml`](.github/workflows/batch-signoff.yml)
 > and the process it implements — see [docs/signoff-process.md](docs/signoff-process.md).
 
 ## Layout

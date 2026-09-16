@@ -3,46 +3,37 @@
 ## What this does
 
 Code review happens as normal: developers open pull requests, the team reviews
-them, they merge into `main`. Nothing about that changes.
+them. What changes is that a pull request cannot merge until a nominated manager
+has signed off — and they do that **once a week for everything at once**, not
+once per pull request.
 
-Separately, once a week, a workflow gathers everything that merged since the
-last approval, writes a plain-English report, publishes it as a web page, and
-then **stops** — waiting for a nominated manager to press Approve.
-
-The manager never reviews a diff. They read a page of tables and press a button.
+The manager never reviews a diff. They read a page of tables and press one
+button.
 
 ## The mechanism
 
 GitHub calls this a *deployment*, but nothing is deployed. A "deployment" is
 simply a job that names an **environment**, and an environment can require
-named reviewers before any job referencing it may start. That is the whole trick.
+named reviewers before any job referencing it may start. That is the gate.
 
-```
-report ──► publish ──► signoff
-(tables)   (Pages)     (PAUSED — waiting for the manager)
-```
-
-The three jobs are separate deliberately. An environment gate pauses a job
-*before its first step runs*, so if the report were generated inside the gated
-job, the reviewer would have to approve before they could read anything.
+What that gate then does is flip a commit status on each reviewed pull request,
+and a branch rule requires that status. So one approval releases many pull
+requests.
 
 ## What the reviewer sees
 
-They get an email: *"Deployment review required."* It links to the workflow run,
-where they find:
+They get one email per cycle: *"Deployment review required."* It links to the
+workflow run, where they find:
 
-1. The **report** rendered directly on the page, above the paused job — tables of
-   pull requests, the work items they closed, and every tag involved.
-2. A link to the same report as a **GitHub Pages site**, if they prefer a clean page.
-3. A **Review deployments** button. They tick `external-signoff`, optionally leave
-   a comment, and press **Approve and deploy** or **Reject**.
+1. The **report** rendered directly on the page, above the paused job — every
+   pull request waiting, the work items they close, and all their tags.
+2. A link to the same report as a **GitHub Pages site**, if they prefer a clean
+   page.
+3. A **Review deployments** button. They tick `external-signoff`, optionally
+   leave a comment, and press **Approve and deploy** or **Reject**.
 
-Approval writes a `signoff-<date>-<time>` tag with their decision recorded
-against it, and the next week's window starts from that tag — so nothing can
-silently skip a review cycle.
-
-Rejection fails the job. The tag is not written, so the same batch reappears in
-the next run.
+Approval releases every pull request in that report. Rejection fails the job,
+nothing is released, and the same set reappears in the next cycle.
 
 ## Access
 
@@ -87,50 +78,70 @@ report labels which kind of summary it carries. A quota exhaustion or an outage
 degrades the wording of one paragraph — it never blocks a sign-off, and the
 tables come straight from GitHub's API either way.
 
-## The two gates, and how they differ
+## How the gate works
 
-This repository runs both. They are independent and answer different questions.
+Pull requests are held until a single batched approval releases them. Nobody is
+notified per pull request.
 
-### Per-pull-request gate (a hard block)
+```
+PR opened ──► Queue for sign-off posts a PENDING manager-signoff status
+              (the branch rule blocks the merge; no reviewer involved yet)
 
-`.github/workflows/pr-signoff.yml` runs on every pull request, builds a report
-for that one change, and then waits on `external-signoff`. Combined with the
-branch rule below, the pull request **cannot merge** until a reviewer approves.
+   ...PRs accumulate through the week...
 
-On the pull request the reviewer sees a check named **Manager sign-off** sitting
-at *Waiting*, and the merge button refused with *"the base branch policy
-prohibits the merge"*. Approving turns the check green and releases it.
+Monday 14:00 UTC (or you trigger it) ──► Batch sign-off
+   collect ──► publish to Pages ──► signoff  ← ONE approval, all PRs
+                                       │
+                                       └──► flips every reviewed PR's
+                                            manager-signoff to success
+```
 
-The branch rule doing the blocking lives in Settings → Rules → *Require manager
-sign-off on main*:
+### What holds a pull request
 
-- **Require deployments to succeed before merging** → `external-signoff`
-- **Require status checks to pass** → `Unit tests`
+The branch rule *Require manager sign-off on main* requires two status checks:
 
-The status check is not decoration. GitHub refuses to arm auto-merge on a
-ruleset that only requires deployments, so without it you cannot get the
-"merges itself once the gate clears" behaviour.
+- `Unit tests` — ordinary CI.
+- `manager-signoff` — posted as **pending** by `pr-queue.yml` when the pull
+  request opens, and flipped to **success** only by an approved batch.
 
-With auto-merge enabled on a pull request, approval alone merges it — nobody
-has to come back and press the button.
+A pending status is what blocks the merge. It also gives the author a readable
+reason on the pull request — *"Queued for the next sign-off batch"* — rather
+than an unexplained blocked merge button.
 
-### Weekly batch sign-off (a record, not a block)
+### What the reviewer does
 
-`.github/workflows/release-signoff.yml` runs on a schedule, gathers everything
-merged since the last approval, and asks for one approval covering the batch.
-It blocks nothing; it produces a periodic, timestamped acceptance record and a
-Pages report. Use it when the question is *"has someone accepted what shipped"*
-rather than *"may this merge"*.
+Once a cycle they get one notification for one workflow run. They read the
+report — on the run summary, or as the [Pages site](https://jl-0.github.io/PR-Approval-Workflow/)
+linked beside it — and approve `external-signoff` once. Every pull request in
+that report becomes mergeable.
 
-Only the weekly workflow publishes to GitHub Pages. A per-pull-request deploy
-would overwrite that site, so the per-PR report goes to the run summary — which
-is the page the reviewer lands on to approve anyway.
+If nothing is queued, the `signoff` job is skipped entirely and nobody is
+disturbed.
 
-### Running only one of them
+### Pushing during review
 
-Delete the workflow you do not want. If you drop the per-PR gate, also remove
-the `required_deployments` rule from the ruleset, or every pull request will
-block forever waiting for a deployment nothing requests.
+The batch records the exact commit each pull request was reviewed at. Before
+releasing one, the approval step re-reads its current head. If the author pushed
+in the meantime the pull request is **left queued**, with a warning in the run
+log, and waits for the next cycle.
+
+That is the point of the whole mechanism: an approval applies to the code that
+was actually read, never to whatever happened to arrive afterwards. A new push
+also produces a new commit with no `manager-signoff` status, so it re-blocks on
+its own.
+
+### Triggering a cycle by hand
+
+Actions → **Batch sign-off** → *Run workflow*. Useful for releasing something
+before the weekly run, and for testing.
+
+## Why not gate each pull request individually
+
+An earlier version put the environment gate on a `pull_request` workflow. It
+worked — the merge button was genuinely blocked — but every pull request created
+its own pending deployment and its own email. Ten open pull requests meant ten
+approvals. Batching trades an immediate gate for one review a week, which is the
+point of having a manager sign off on a body of work rather than on each change.
 
 ## Notes and limits
 
@@ -139,21 +150,9 @@ token and no secrets. The report still builds, but if you later add secrets to
 that job, switch to `pull_request_target` and understand what that exposes.
 
 **Direct pushes to `main`.** The ruleset applies to everyone including repository
-admins, since no bypass actors are configured. Add one under Settings → Rules if
-you need an escape hatch.
+admins, since no bypass actors are configured. Every change goes through a pull
+request and therefore through a sign-off batch. Add a bypass actor under
+Settings → Rules if you need an escape hatch.
 
 **Required reviewers are not consensus.** If several are listed, any one of them
 approving is enough.
-
-## Optionally: blocking merges on sign-off
-
-The setup above is a periodic batch review, which is usually what people want.
-If instead a *single* pull request must not merge until the manager signs off:
-
-1. Change the trigger to `pull_request`.
-2. In branch protection for `main` (Settings → Rules), enable **Require
-   deployments to succeed before merging** and select `external-signoff`.
-
-The pull request then stays unmergeable until the manager approves the
-deployment. Combine with auto-merge and it merges itself the moment both the
-team review and the sign-off are green.

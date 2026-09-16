@@ -65,6 +65,11 @@ def is_pull_request(payload: dict) -> bool:
     return payload.get("scope") == "pull_request"
 
 
+def is_queued(payload: dict) -> bool:
+    """True when the report covers open pull requests awaiting sign-off."""
+    return payload.get("scope") == "queued"
+
+
 def plural(count: int, singular: str, plural_form: str | None = None) -> str:
     return singular if count == 1 else (plural_form or singular + "s")
 
@@ -97,6 +102,15 @@ def auto_narrative(payload: dict) -> str:
             f"- {pr['author']} proposes {pr['title'].rstrip('.')}, changing "
             f"{pr['changed_files']} {plural(pr['changed_files'], 'file')} "
             f"(+{pr['additions']}/-{pr['deletions']})."
+        ]
+    elif is_queued(payload):
+        bullets = [
+            f"- {len(prs)} {plural(len(prs), 'pull request')} "
+            f"{plural(len(prs), 'is', 'are')} ready to merge and "
+            f"{plural(len(prs), 'is', 'are')} held pending your sign-off, "
+            f"closing {len(issues)} tracked {plural(len(issues), 'work item')} "
+            f"from {len(authors)} {plural(len(authors), 'contributor')} "
+            f"({', '.join(authors)})."
         ]
     else:
         bullets = [
@@ -187,6 +201,20 @@ def render_markdown(
             "approved.",
             "",
         ]
+    elif is_queued(payload):
+        lines = [
+            "# Sign-off request",
+            "",
+            f"**Repository:** `{payload['repo']}` &nbsp;·&nbsp; "
+            f"**Target branch:** `{payload['base']}` &nbsp;·&nbsp; "
+            f"{pretty_date(payload['generated_at'])}",
+            "",
+            f"**{len(prs)} {plural(len(prs), 'pull request')}** "
+            f"{plural(len(prs), 'is', 'are')} ready to merge and held until you "
+            "approve. Approving releases "
+            f"{plural(len(prs), 'it', 'all of them')} at once.",
+            "",
+        ]
     else:
         lines = [
             "# Change sign-off request",
@@ -221,7 +249,11 @@ def render_markdown(
         return "\n".join(lines)
 
     lines += [
-        "## The change" if is_pull_request(payload) else "## Changes in this batch",
+        "## The change"
+        if is_pull_request(payload)
+        else "## Changes awaiting sign-off"
+        if is_queued(payload)
+        else "## Changes in this batch",
         "",
         "| PR | Title | Author | Tags |",
         "| --- | --- | --- | --- |",
@@ -272,6 +304,10 @@ def render_markdown(
         "Approving the **external-signoff** deployment below releases this "
         "pull request to merge, with your GitHub identity and a timestamp."
         if is_pull_request(payload)
+        else "Approving the **external-signoff** deployment below releases the "
+        f"{len(prs)} {plural(len(prs), 'pull request')} above to merge, with "
+        "your GitHub identity and a timestamp."
+        if is_queued(payload)
         else "Approving the **external-signoff** deployment below records your "
         "acceptance of this batch, with your GitHub identity and a timestamp.",
         "",
@@ -402,6 +438,19 @@ def render_html(
             (f"+{pr['additions']}", "Lines added"),
             (f"-{pr['deletions']}", "Lines removed"),
         ]
+    elif is_queued(payload):
+        title = f"Sign-off request — {payload['repo']}"
+        heading = "Sign-off request"
+        meta = (
+            f"<code>{html.escape(payload['repo'])}</code> · into "
+            f"<code>{html.escape(payload['base'])}</code> · "
+            f"{pretty_date(payload['generated_at'])}"
+        )
+        stats = [
+            (len(prs), "Held for sign-off"),
+            (issue_count, "Work items closed"),
+            (len(authors), "Contributors"),
+        ]
     else:
         title = f"Change sign-off — {payload['repo']}"
         heading = "Change sign-off request"
@@ -455,7 +504,11 @@ def render_html(
         )
     else:
         parts += [
-            "<h2>The change</h2>" if single else "<h2>Changes in this batch</h2>",
+            "<h2>The change</h2>"
+            if single
+            else "<h2>Changes awaiting sign-off</h2>"
+            if is_queued(payload)
+            else "<h2>Changes in this batch</h2>",
             "<div class='table-scroll'><table><thead><tr>"
             "<th>PR</th><th>Title</th><th>Author</th><th>Tags</th>"
             "</tr></thead><tbody>",

@@ -34,6 +34,8 @@ query($owner: String!, $name: String!, $cursor: String) {
         url
         mergedAt
         baseRefName
+        headRefOid
+        isDraft
         additions
         deletions
         changedFiles
@@ -63,6 +65,8 @@ query($owner: String!, $name: String!, $number: Int!) {
       url
       mergedAt
       baseRefName
+      headRefOid
+      isDraft
       additions
       deletions
       changedFiles
@@ -74,6 +78,44 @@ query($owner: String!, $name: String!, $number: Int!) {
           title
           url
           labels(first: 20) { nodes { name color } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+OPEN_QUERY = """
+query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(
+      states: OPEN
+      first: 50
+      orderBy: {field: CREATED_AT, direction: ASC}
+      after: $cursor
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        title
+        url
+        mergedAt
+        baseRefName
+        headRefOid
+        isDraft
+        additions
+        deletions
+        changedFiles
+        author { login }
+        labels(first: 20) { nodes { name color } }
+        closingIssuesReferences(first: 10) {
+          nodes {
+            number
+            title
+            url
+            labels(first: 20) { nodes { name color } }
+          }
         }
       }
     }
@@ -110,6 +152,35 @@ def fetch_pull_requests(owner: str, name: str) -> list[dict]:
         if not page["pageInfo"]["hasNextPage"] or len(nodes) >= 500:
             return nodes
         cursor = page["pageInfo"]["endCursor"]
+
+
+def fetch_open_pull_requests(owner: str, name: str) -> list[dict]:
+    """Every open pull request, oldest first."""
+    nodes: list[dict] = []
+    cursor: str | None = None
+    while True:
+        args = [
+            "api", "graphql",
+            "-f", f"query={OPEN_QUERY}",
+            "-F", f"owner={owner}",
+            "-F", f"name={name}",
+        ]
+        if cursor:
+            args += ["-F", f"cursor={cursor}"]
+        page = json.loads(run_gh(args))["data"]["repository"]["pullRequests"]
+        nodes.extend(page["nodes"])
+        if not page["pageInfo"]["hasNextPage"] or len(nodes) >= 300:
+            return nodes
+        cursor = page["pageInfo"]["endCursor"]
+
+
+def signed_off(owner: str, name: str, sha: str, context: str) -> bool:
+    """True when *sha* already carries a successful sign-off status."""
+    out = run_gh(["api", f"repos/{owner}/{name}/commits/{sha}/status"])
+    for status in json.loads(out).get("statuses", []):
+        if status["context"] == context and status["state"] == "success":
+            return True
+    return False
 
 
 def fetch_one_pull_request(owner: str, name: str, number: int) -> dict:
@@ -149,6 +220,7 @@ def normalise(node: dict) -> dict:
         "title": node["title"],
         "url": node["url"],
         "merged_at": node.get("mergedAt"),
+        "head_sha": node.get("headRefOid"),
         "base": node["baseRefName"],
         "author": (node.get("author") or {}).get("login", "unknown"),
         "additions": node["additions"],
@@ -209,6 +281,16 @@ def main() -> int:
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument("--base", default="main", help="branch PRs merged into")
     parser.add_argument(
+        "--queued",
+        action="store_true",
+        help="report on every open PR still awaiting sign-off",
+    )
+    parser.add_argument(
+        "--status-context",
+        default="manager-signoff",
+        help="commit status that marks a PR as already signed off",
+    )
+    parser.add_argument(
         "--pr",
         type=int,
         default=None,
@@ -230,6 +312,21 @@ def main() -> int:
     if args.pr is not None:
         selected = [normalise(fetch_one_pull_request(owner, name, args.pr))]
         scope = "pull_request"
+        since = None
+    elif args.queued:
+        # A draft is not asking to merge, and a PR already signed off at its
+        # current head must not be put in front of the reviewer twice.
+        candidates = [
+            node
+            for node in fetch_open_pull_requests(owner, name)
+            if not node.get("isDraft") and node["baseRefName"] == args.base
+        ]
+        selected = [
+            normalise(node)
+            for node in candidates
+            if not signed_off(owner, name, node["headRefOid"], args.status_context)
+        ]
+        scope = "queued"
         since = None
     else:
         since = resolve_since(args.since, args.fallback_days)
@@ -256,14 +353,28 @@ def main() -> int:
     prompt.write_text(build_prompt(payload))
 
     if args.github_output and args.pr is None:
-        # Report the resolved window, not the raw argument, which is empty on a
-        # first run and on every scheduled run.
+        lines = [f"pr_count={len(selected)}"]
+        if args.queued:
+            lines.append(
+                "pr_numbers=" + ",".join(str(pr["number"]) for pr in selected)
+            )
+            # Carry the exact commit each PR was reviewed at, so the approval
+            # can be refused later if the author pushed during the review.
+            lines.append(
+                "pr_shas="
+                + ",".join(f"{pr['number']}:{pr['head_sha']}" for pr in selected)
+            )
+        else:
+            # Report the resolved window, not the raw argument, which is empty
+            # on a first run and on every scheduled run.
+            lines.append(f"window_start={since.date().isoformat()}")
         with open(args.github_output, "a", encoding="utf-8") as handle:
-            handle.write(f"pr_count={len(selected)}\n")
-            handle.write(f"window_start={since.date().isoformat()}\n")
+            handle.write("\n".join(lines) + "\n")
 
     if args.pr is not None:
         print(f"collected pull request #{args.pr}")
+    elif args.queued:
+        print(f"{len(selected)} pull request(s) awaiting sign-off")
     else:
         print(
             f"{len(selected)} pull request(s) merged into {args.base} "
