@@ -1,0 +1,201 @@
+name: Release sign-off
+
+# Batches everything merged into main since the last approved sign-off, builds a
+# plain-English report, publishes it to GitHub Pages, and then pauses on a
+# protected environment until the nominated reviewer approves.
+#
+# The report is built in a SEPARATE job from the gate on purpose: an environment
+# gate pauses a job *before* its first step, so a reviewer could not read a
+# summary produced inside the gated job itself.
+
+on:
+  schedule:
+    # 14:00 UTC every Monday.
+    - cron: '0 14 * * MON'
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Include PRs merged on or after this date (YYYY-MM-DD). Blank = since the last sign-off tag.'
+        required: false
+        type: string
+      fallback_days:
+        description: 'Window to use when no sign-off tag exists yet.'
+        required: false
+        default: '30'
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-signoff
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Build sign-off report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # read code and sign-off tags
+      pull-requests: read   # list merged PRs and their labels
+      issues: read          # read labels on the issues those PRs closed
+      models: read          # free GitHub Models inference for the summary
+    outputs:
+      pr_count: ${{ steps.collect.outputs.pr_count }}
+      window_start: ${{ steps.window.outputs.since }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # need tag history to find the last sign-off
+
+      - name: Determine the sign-off window
+        id: window
+        run: |
+          if [ -n "${{ inputs.since }}" ]; then
+            since="${{ inputs.since }}"
+            echo "Window start supplied by hand: $since"
+          else
+            last_tag="$(git tag --list 'signoff-*' --sort=-creatordate | head -n1)"
+            if [ -n "$last_tag" ]; then
+              since="$(git log -1 --format=%aI "$last_tag")"
+              echo "Window starts at the last sign-off tag $last_tag ($since)"
+            else
+              since=""
+              echo "No sign-off tag yet; falling back to the default window."
+            fi
+          fi
+          echo "since=$since" >> "$GITHUB_OUTPUT"
+
+      - name: Collect merged pull requests
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/collect_prs.py \
+            --repo "${{ github.repository }}" \
+            --base "${{ github.event.repository.default_branch }}" \
+            --since "${{ steps.window.outputs.since }}" \
+            --fallback-days "${{ inputs.fallback_days || '30' }}" \
+            --out build/prs.json \
+            --prompt-out build/prompt.txt
+          count="$(python3 -c "import json;print(len(json.load(open('build/prs.json'))['pull_requests']))")"
+          echo "pr_count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Write the summary brief
+        id: brief
+        run: |
+          # Non-empty batches get a narrative; an empty one needs no model call.
+          if [ "${{ steps.collect.outputs.pr_count }}" -gt 0 ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summarise the batch with GitHub Models
+        id: ai
+        if: steps.brief.outputs.needed == 'true'
+        continue-on-error: true   # rate limits must never block the sign-off
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4o-mini
+          max-tokens: 500
+          system-prompt: >-
+            You write change summaries for a manager who approves releases but does
+            not read code. Given a list of merged pull requests, reply with three to
+            five short bullet points, each starting with "- ", describing what changed
+            in terms of user-visible behaviour, risk, and obligations met. Group
+            related pull requests together. Call out anything tagged security,
+            compliance, or breaking-change explicitly. Do not invent detail that is
+            not in the input, do not restate pull request titles verbatim, and do not
+            add a heading, preamble, or closing remark.
+          prompt-file: build/prompt.txt
+
+      - name: Adopt the generated summary
+        if: steps.ai.outcome == 'success' && steps.ai.outputs.response-file != ''
+        run: cp "${{ steps.ai.outputs.response-file }}" build/narrative.md
+
+      - name: Note that the summary was unavailable
+        if: steps.brief.outputs.needed == 'true' && steps.ai.outcome != 'success'
+        run: |
+          echo "GitHub Models was unavailable for this run (most likely a rate limit)."
+          echo "The tables below are generated directly from GitHub and are complete on their own."
+
+      - name: Render the report
+        run: |
+          python3 scripts/render_report.py \
+            --data build/prs.json \
+            --narrative build/narrative.md \
+            --markdown-out build/summary.md \
+            --html-out site/index.html \
+            --page-url "${{ format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Publish the report to the run summary
+        run: cat build/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the raw data as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signoff-data
+          path: build/
+          retention-days: 90
+
+      - name: Package the page
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  publish:
+    name: Publish the report page
+    needs: report
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    outputs:
+      page_url: ${{ steps.deploy.outputs.page_url }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  signoff:
+    name: Manager sign-off
+    needs: [report, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # tag the approved point in history
+    # This is the gate. The job will not start until a required reviewer on the
+    # external-signoff environment approves it in the Actions UI.
+    environment:
+      name: external-signoff
+      url: ${{ needs.publish.outputs.page_url || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record the approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="signoff-$(date -u +%Y-%m-%d-%H%M)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "Sign-off approved via the external-signoff environment.
+
+          Pull requests in this batch: ${{ needs.report.outputs.pr_count }}
+          Window start: ${{ needs.report.outputs.window_start }}
+          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git push origin "$tag"
+
+          {
+            echo "# Sign-off recorded"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Tag | \`$tag\` |"
+            echo "| Pull requests approved | ${{ needs.report.outputs.pr_count }} |"
+            echo "| Approved at | $(date -u '+%Y-%m-%d %H:%M UTC') |"
+            echo
+            echo "The next sign-off run will start its window at this tag."
+          } >> "$GITHUB_STEP_SUMMARY"
