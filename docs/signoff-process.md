@@ -87,6 +87,64 @@ report labels which kind of summary it carries. A quota exhaustion or an outage
 degrades the wording of one paragraph — it never blocks a sign-off, and the
 tables come straight from GitHub's API either way.
 
+## The two gates, and how they differ
+
+This repository runs both. They are independent and answer different questions.
+
+### Per-pull-request gate (a hard block)
+
+`.github/workflows/pr-signoff.yml` runs on every pull request, builds a report
+for that one change, and then waits on `external-signoff`. Combined with the
+branch rule below, the pull request **cannot merge** until a reviewer approves.
+
+On the pull request the reviewer sees a check named **Manager sign-off** sitting
+at *Waiting*, and the merge button refused with *"the base branch policy
+prohibits the merge"*. Approving turns the check green and releases it.
+
+The branch rule doing the blocking lives in Settings → Rules → *Require manager
+sign-off on main*:
+
+- **Require deployments to succeed before merging** → `external-signoff`
+- **Require status checks to pass** → `Unit tests`
+
+The status check is not decoration. GitHub refuses to arm auto-merge on a
+ruleset that only requires deployments, so without it you cannot get the
+"merges itself once the gate clears" behaviour.
+
+With auto-merge enabled on a pull request, approval alone merges it — nobody
+has to come back and press the button.
+
+### Weekly batch sign-off (a record, not a block)
+
+`.github/workflows/release-signoff.yml` runs on a schedule, gathers everything
+merged since the last approval, and asks for one approval covering the batch.
+It blocks nothing; it produces a periodic, timestamped acceptance record and a
+Pages report. Use it when the question is *"has someone accepted what shipped"*
+rather than *"may this merge"*.
+
+Only the weekly workflow publishes to GitHub Pages. A per-pull-request deploy
+would overwrite that site, so the per-PR report goes to the run summary — which
+is the page the reviewer lands on to approve anyway.
+
+### Running only one of them
+
+Delete the workflow you do not want. If you drop the per-PR gate, also remove
+the `required_deployments` rule from the ruleset, or every pull request will
+block forever waiting for a deployment nothing requests.
+
+## Notes and limits
+
+**Fork pull requests.** A `pull_request` workflow from a fork gets a read-only
+token and no secrets. The report still builds, but if you later add secrets to
+that job, switch to `pull_request_target` and understand what that exposes.
+
+**Direct pushes to `main`.** The ruleset applies to everyone including repository
+admins, since no bypass actors are configured. Add one under Settings → Rules if
+you need an escape hatch.
+
+**Required reviewers are not consensus.** If several are listed, any one of them
+approving is enough.
+
 ## Optionally: blocking merges on sign-off
 
 The setup above is a periodic batch review, which is usually what people want.
