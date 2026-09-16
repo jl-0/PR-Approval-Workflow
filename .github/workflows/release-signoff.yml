@@ -109,15 +109,25 @@ jobs:
             add a heading, preamble, or closing remark.
           prompt-file: build/prompt.txt
 
+      # Read through an env var, not an inline expression: the response is model
+      # output, and `outputs.response-file` cannot be used directly because the
+      # expression parser reads the hyphen as subtraction.
       - name: Adopt the generated summary
-        if: steps.ai.outcome == 'success' && steps.ai.outputs.response-file != ''
-        run: cp "${{ steps.ai.outputs.response-file }}" build/narrative.md
+        if: steps.ai.outcome == 'success'
+        env:
+          NARRATIVE: ${{ steps.ai.outputs.response }}
+        run: |
+          printf '%s\n' "$NARRATIVE" > build/narrative.md
+          if ! grep -q '[^[:space:]]' build/narrative.md; then
+            echo "The model returned nothing usable; dropping the narrative."
+            rm -f build/narrative.md
+          fi
 
       - name: Note that the summary was unavailable
-        if: steps.brief.outputs.needed == 'true' && steps.ai.outcome != 'success'
+        if: steps.brief.outputs.needed == 'true' && hashFiles('build/narrative.md') == ''
         run: |
-          echo "GitHub Models was unavailable for this run (most likely a rate limit)."
-          echo "The tables below are generated directly from GitHub and are complete on their own."
+          echo "::notice::GitHub Models produced no summary for this run (most likely a rate limit)."
+          echo "The tables are generated directly from GitHub and are complete without it."
 
       - name: Render the report
         run: |
