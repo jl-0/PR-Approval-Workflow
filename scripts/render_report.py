@@ -60,6 +60,11 @@ def all_labels(pr: dict) -> list[dict]:
     return [seen[name] for name in sorted(seen)]
 
 
+def is_pull_request(payload: dict) -> bool:
+    """True when the report covers one open pull request rather than a window."""
+    return payload.get("scope") == "pull_request"
+
+
 def plural(count: int, singular: str, plural_form: str | None = None) -> str:
     return singular if count == 1 else (plural_form or singular + "s")
 
@@ -85,15 +90,27 @@ def auto_narrative(payload: dict) -> str:
 
     issues = [issue for pr in prs for issue in pr["issues"]]
     authors = sorted({pr["author"] for pr in prs})
-    bullets = [
-        f"- {len(prs)} {plural(len(prs), 'pull request')} merged in this window, "
-        f"closing {len(issues)} tracked {plural(len(issues), 'work item')}, "
-        f"from {len(authors)} {plural(len(authors), 'contributor')} "
-        f"({', '.join(authors)})."
-    ]
+
+    if is_pull_request(payload):
+        pr = prs[0]
+        bullets = [
+            f"- {pr['author']} proposes {pr['title'].rstrip('.')}, changing "
+            f"{pr['changed_files']} {plural(pr['changed_files'], 'file')} "
+            f"(+{pr['additions']}/-{pr['deletions']})."
+        ]
+    else:
+        bullets = [
+            f"- {len(prs)} {plural(len(prs), 'pull request')} merged in this window, "
+            f"closing {len(issues)} tracked {plural(len(issues), 'work item')}, "
+            f"from {len(authors)} {plural(len(authors), 'contributor')} "
+            f"({', '.join(authors)})."
+        ]
 
     flagged = [pr for pr in prs if NOTABLE & {l["name"] for l in all_labels(pr)}]
-    if flagged:
+    if flagged and is_pull_request(payload):
+        tags = ", ".join(sorted(NOTABLE & {l["name"] for l in all_labels(prs[0])}))
+        bullets.append(f"- Tagged {tags}, so it warrants a closer look.")
+    elif flagged:
         listed = "; ".join(
             f"#{pr['number']} {pr['title']}"
             + f" ({', '.join(sorted(NOTABLE & {l['name'] for l in all_labels(pr)}))})"
@@ -102,6 +119,21 @@ def auto_narrative(payload: dict) -> str:
         bullets.append(
             f"- Needs a closer look: {listed}."
         )
+
+    if is_pull_request(payload):
+        described = categorise(prs[0])
+        if described:
+            bullets.append(f"- Categorised as {described}.")
+        pr = prs[0]
+        if pr["issues"]:
+            listed = "; ".join(f"#{i['number']} {i['title']}" for i in pr["issues"])
+            bullets.append(f"- Closes {listed}.")
+        else:
+            bullets.append(
+                "- Closes no tracked work item, so there is no issue history "
+                "behind this change."
+            )
+        return "\n".join(bullets)
 
     grouped: dict[str, list[int]] = {}
     for pr in prs:
@@ -143,18 +175,31 @@ def render_markdown(
     payload: dict, narrative: str, page_url: str | None, ai: bool
 ) -> str:
     prs = payload["pull_requests"]
-    lines = [
-        "# Change sign-off request",
-        "",
-        f"**Repository:** `{payload['repo']}` &nbsp;·&nbsp; "
-        f"**Branch:** `{payload['base']}` &nbsp;·&nbsp; "
-        f"**Window:** {pretty_date(payload['since'])} → "
-        f"{pretty_date(payload['generated_at'])}",
-        "",
-        f"**{len(prs)} pull request(s)** merged in this window and are awaiting "
-        "your approval.",
-        "",
-    ]
+    if is_pull_request(payload):
+        pr = prs[0]
+        lines = [
+            f"# Sign-off request: PR #{pr['number']}",
+            "",
+            f"**[{pr['title']}]({pr['url']})** &nbsp;·&nbsp; "
+            f"by @{pr['author']} &nbsp;·&nbsp; into `{payload['base']}`",
+            "",
+            "This pull request **cannot merge** until the sign-off below is "
+            "approved.",
+            "",
+        ]
+    else:
+        lines = [
+            "# Change sign-off request",
+            "",
+            f"**Repository:** `{payload['repo']}` &nbsp;·&nbsp; "
+            f"**Branch:** `{payload['base']}` &nbsp;·&nbsp; "
+            f"**Window:** {pretty_date(payload['since'])} → "
+            f"{pretty_date(payload['generated_at'])}",
+            "",
+            f"**{len(prs)} pull request(s)** merged in this window and are awaiting "
+            "your approval.",
+            "",
+        ]
 
     if page_url:
         lines += [f"📄 **[Open the full report page]({page_url})**", ""]
@@ -176,7 +221,7 @@ def render_markdown(
         return "\n".join(lines)
 
     lines += [
-        "## Changes in this batch",
+        "## The change" if is_pull_request(payload) else "## Changes in this batch",
         "",
         "| PR | Title | Author | Tags |",
         "| --- | --- | --- | --- |",
@@ -194,7 +239,9 @@ def render_markdown(
     if linked:
         lines += [
             "",
-            "## Work items closed",
+            "## Work items this closes"
+            if is_pull_request(payload)
+            else "## Work items closed",
             "",
             "| Issue | Title | Tags | Delivered by |",
             "| --- | --- | --- | --- |",
@@ -208,7 +255,7 @@ def render_markdown(
             )
 
     counts = label_counts(payload)
-    if counts:
+    if counts and not is_pull_request(payload):
         lines += ["", "## Tag totals", ""]
         lines += [
             "| Tag | Pull requests |",
@@ -222,7 +269,10 @@ def render_markdown(
         "",
         "---",
         "",
-        "Approving the **external-signoff** deployment below records your "
+        "Approving the **external-signoff** deployment below releases this "
+        "pull request to merge, with your GitHub identity and a timestamp."
+        if is_pull_request(payload)
+        else "Approving the **external-signoff** deployment below records your "
         "acceptance of this batch, with your GitHub identity and a timestamp.",
         "",
     ]
@@ -337,27 +387,54 @@ def render_html(
     issue_count = sum(len(pr["issues"]) for pr in prs)
     authors = {pr["author"] for pr in prs}
 
+    single = is_pull_request(payload) and prs
+    if single:
+        pr = prs[0]
+        title = f"Sign-off — PR #{pr['number']}"
+        heading = f"Sign-off request: PR #{pr['number']}"
+        meta = (
+            f"<a href='{pr['url']}'>{html.escape(pr['title'])}</a> · by "
+            f"{html.escape(pr['author'])} · into "
+            f"<code>{html.escape(payload['base'])}</code>"
+        )
+        stats = [
+            (pr["changed_files"], "Files changed"),
+            (f"+{pr['additions']}", "Lines added"),
+            (f"-{pr['deletions']}", "Lines removed"),
+        ]
+    else:
+        title = f"Change sign-off — {payload['repo']}"
+        heading = "Change sign-off request"
+        meta = (
+            f"<code>{html.escape(payload['repo'])}</code> · branch "
+            f"<code>{html.escape(payload['base'])}</code> · "
+            f"{pretty_date(payload['since'])} → "
+            f"{pretty_date(payload['generated_at'])}"
+        )
+        stats = [
+            (len(prs), "Pull requests"),
+            (issue_count, "Work items closed"),
+            (len(authors), "Contributors"),
+        ]
+
     parts = [
         "<!doctype html>",
         '<html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>Change sign-off — {html.escape(payload['repo'])}</title>",
+        f"<title>{html.escape(title)}</title>",
         f"<style>{CSS}</style></head><body><div class='wrap'>",
         "<header class='masthead'>",
-        "<h1>Change sign-off request</h1>",
-        f"<p class='meta'><code>{html.escape(payload['repo'])}</code> · branch "
-        f"<code>{html.escape(payload['base'])}</code> · "
-        f"{pretty_date(payload['since'])} → {pretty_date(payload['generated_at'])}</p>",
+        f"<h1>{html.escape(heading)}</h1>",
+        f"<p class='meta'>{meta}</p>",
         "</header>",
         "<div class='stats'>",
-        f"<div class='stat'><span class='n'>{len(prs)}</span>"
-        "<span class='k'>Pull requests</span></div>",
-        f"<div class='stat'><span class='n'>{issue_count}</span>"
-        "<span class='k'>Work items closed</span></div>",
-        f"<div class='stat'><span class='n'>{len(authors)}</span>"
-        "<span class='k'>Contributors</span></div>",
-        "</div>",
     ]
+    parts += [
+        f"<div class='stat'><span class='n'>{value}</span>"
+        f"<span class='k'>{label}</span></div>"
+        for value, label in stats
+    ]
+    parts.append("</div>")
 
     if narrative:
         origin = (
@@ -378,7 +455,7 @@ def render_html(
         )
     else:
         parts += [
-            "<h2>Changes in this batch</h2>",
+            "<h2>The change</h2>" if single else "<h2>Changes in this batch</h2>",
             "<div class='table-scroll'><table><thead><tr>"
             "<th>PR</th><th>Title</th><th>Author</th><th>Tags</th>"
             "</tr></thead><tbody>",
@@ -396,7 +473,9 @@ def render_html(
         linked = [(pr, issue) for pr in prs for issue in pr["issues"]]
         if linked:
             parts += [
-                "<h2>Work items closed</h2>",
+                "<h2>Work items this closes</h2>"
+                if single
+                else "<h2>Work items closed</h2>",
                 "<div class='table-scroll'><table><thead><tr>"
                 "<th>Issue</th><th>Title</th><th>Tags</th><th>Delivered by</th>"
                 "</tr></thead><tbody>",
@@ -418,7 +497,7 @@ def render_html(
                 "Those rows are worth a closer look before you approve.</div>"
             )
 
-        if counts:
+        if counts and not single:
             parts += [
                 "<h2>Tag totals</h2>",
                 "<div class='table-scroll'><table><thead><tr><th>Tag</th>"

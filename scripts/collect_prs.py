@@ -54,6 +54,34 @@ query($owner: String!, $name: String!, $cursor: String) {
 """
 
 
+SINGLE_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      title
+      url
+      mergedAt
+      baseRefName
+      additions
+      deletions
+      changedFiles
+      author { login }
+      labels(first: 20) { nodes { name color } }
+      closingIssuesReferences(first: 10) {
+        nodes {
+          number
+          title
+          url
+          labels(first: 20) { nodes { name color } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
 def run_gh(args: list[str]) -> str:
     result = subprocess.run(
         ["gh", *args], capture_output=True, text=True, check=False
@@ -84,6 +112,21 @@ def fetch_pull_requests(owner: str, name: str) -> list[dict]:
         cursor = page["pageInfo"]["endCursor"]
 
 
+def fetch_one_pull_request(owner: str, name: str, number: int) -> dict:
+    """Fetch a single pull request, merged or not."""
+    out = run_gh([
+        "api", "graphql",
+        "-f", f"query={SINGLE_QUERY}",
+        "-F", f"owner={owner}",
+        "-F", f"name={name}",
+        "-F", f"number={number}",
+    ])
+    node = json.loads(out)["data"]["repository"]["pullRequest"]
+    if node is None:
+        raise SystemExit(f"no such pull request: #{number}")
+    return node
+
+
 def labels_of(container: dict) -> list[dict]:
     return [
         {"name": label["name"], "color": label["color"]}
@@ -105,7 +148,7 @@ def normalise(node: dict) -> dict:
         "number": node["number"],
         "title": node["title"],
         "url": node["url"],
-        "merged_at": node["mergedAt"],
+        "merged_at": node.get("mergedAt"),
         "base": node["baseRefName"],
         "author": (node.get("author") or {}).get("login", "unknown"),
         "additions": node["additions"],
@@ -138,10 +181,12 @@ def resolve_since(raw: str | None, fallback_days: int) -> datetime:
 
 def build_prompt(payload: dict) -> str:
     """Compose the plain-text brief handed to the model."""
-    lines = [
-        "Merged pull requests awaiting sign-off:",
-        "",
-    ]
+    heading = (
+        "Pull request awaiting sign-off before it may merge:"
+        if payload.get("scope") == "pull_request"
+        else "Merged pull requests awaiting sign-off:"
+    )
+    lines = [heading, ""]
     for pr in payload["pull_requests"]:
         pr_labels = ", ".join(label["name"] for label in pr["labels"]) or "none"
         lines.append(f"- PR #{pr['number']}: {pr['title']}")
@@ -163,6 +208,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument("--base", default="main", help="branch PRs merged into")
+    parser.add_argument(
+        "--pr",
+        type=int,
+        default=None,
+        help="report on this one pull request instead of a merged window",
+    )
     parser.add_argument("--since", default=None, help="ISO date or timestamp")
     parser.add_argument("--fallback-days", type=int, default=30)
     parser.add_argument("--out", default="build/prs.json")
@@ -175,16 +226,23 @@ def main() -> int:
     args = parser.parse_args()
 
     owner, _, name = args.repo.partition("/")
-    since = resolve_since(args.since, args.fallback_days)
 
-    nodes = fetch_pull_requests(owner, name)
-    selected = [normalise(n) for n in nodes if in_window(n, since, args.base)]
-    selected.sort(key=lambda pr: pr["merged_at"])
+    if args.pr is not None:
+        selected = [normalise(fetch_one_pull_request(owner, name, args.pr))]
+        scope = "pull_request"
+        since = None
+    else:
+        since = resolve_since(args.since, args.fallback_days)
+        nodes = fetch_pull_requests(owner, name)
+        selected = [normalise(n) for n in nodes if in_window(n, since, args.base)]
+        selected.sort(key=lambda pr: pr["merged_at"] or "")
+        scope = "window"
 
     payload = {
         "repo": args.repo,
         "base": args.base,
-        "since": since.isoformat(),
+        "scope": scope,
+        "since": since.isoformat() if since else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "pull_requests": selected,
     }
@@ -197,14 +255,20 @@ def main() -> int:
     prompt.parent.mkdir(parents=True, exist_ok=True)
     prompt.write_text(build_prompt(payload))
 
-    if args.github_output:
+    if args.github_output and args.pr is None:
         # Report the resolved window, not the raw argument, which is empty on a
         # first run and on every scheduled run.
         with open(args.github_output, "a", encoding="utf-8") as handle:
             handle.write(f"pr_count={len(selected)}\n")
             handle.write(f"window_start={since.date().isoformat()}\n")
 
-    print(f"{len(selected)} pull request(s) merged into {args.base} since {since.date()}")
+    if args.pr is not None:
+        print(f"collected pull request #{args.pr}")
+    else:
+        print(
+            f"{len(selected)} pull request(s) merged into {args.base} "
+            f"since {since.date()}"
+        )
     return 0
 
 
