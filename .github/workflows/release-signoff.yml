@@ -40,7 +40,7 @@ jobs:
       issues: read          # read labels on the issues those PRs closed
     outputs:
       pr_count: ${{ steps.collect.outputs.pr_count }}
-      window_start: ${{ steps.window.outputs.since }}
+      window_start: ${{ steps.collect.outputs.window_start }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,9 +75,8 @@ jobs:
             --since "${{ steps.window.outputs.since }}" \
             --fallback-days "${{ inputs.fallback_days || '30' }}" \
             --out build/prs.json \
-            --prompt-out build/prompt.txt
-          count="$(python3 -c "import json;print(len(json.load(open('build/prs.json'))['pull_requests']))")"
-          echo "pr_count=$count" >> "$GITHUB_OUTPUT"
+            --prompt-out build/prompt.txt \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Decide whether to ask a model for a summary
         id: brief

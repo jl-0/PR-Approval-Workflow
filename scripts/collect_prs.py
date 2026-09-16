@@ -167,6 +167,11 @@ def main() -> int:
     parser.add_argument("--fallback-days", type=int, default=30)
     parser.add_argument("--out", default="build/prs.json")
     parser.add_argument("--prompt-out", default="build/prompt.txt")
+    parser.add_argument(
+        "--github-output",
+        default=None,
+        help="file to append pr_count and window_start to (pass $GITHUB_OUTPUT)",
+    )
     args = parser.parse_args()
 
     owner, _, name = args.repo.partition("/")
@@ -191,6 +196,13 @@ def main() -> int:
     prompt = pathlib.Path(args.prompt_out)
     prompt.parent.mkdir(parents=True, exist_ok=True)
     prompt.write_text(build_prompt(payload))
+
+    if args.github_output:
+        # Report the resolved window, not the raw argument, which is empty on a
+        # first run and on every scheduled run.
+        with open(args.github_output, "a", encoding="utf-8") as handle:
+            handle.write(f"pr_count={len(selected)}\n")
+            handle.write(f"window_start={since.date().isoformat()}\n")
 
     print(f"{len(selected)} pull request(s) merged into {args.base} since {since.date()}")
     return 0
