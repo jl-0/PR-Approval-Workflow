@@ -6,6 +6,7 @@ from collections import deque
 from collections.abc import Iterator
 
 from .config import GatewayConfig
+from .decode import checksum_ok
 
 
 class FrameQueue:
@@ -16,10 +17,19 @@ class FrameQueue:
         self._frames: deque[bytes] = deque(maxlen=self._config.queue_depth)
         self._seen: set[bytes] = set()
         self.dropped = 0
+        self.rejected = 0
 
     def offer(self, frame: bytes) -> bool:
-        """Accept *frame*; return False if it was a duplicate."""
+        """Accept *frame*; return False if it was rejected.
+
+        A frame is rejected when it duplicates one already seen, or — under
+        strict checksums — when its trailing sum does not verify. Rejected
+        frames never reach the store.
+        """
         if frame in self._seen:
+            return False
+        if self._config.strict_checksums and not checksum_ok(frame):
+            self.rejected += 1
             return False
         if len(self._frames) == self._frames.maxlen:
             self.dropped += 1

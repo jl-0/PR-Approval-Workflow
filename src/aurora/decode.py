@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 HEADER = struct.Struct(">HHI")
 APID_MASK = 0x07FF
+CHECKSUM = struct.Struct(">H")
 
 
 @dataclass(frozen=True)
@@ -37,3 +38,16 @@ def decode(frame: bytes, dictionary: dict[int, str]) -> Measurand:
     _identifier, _sequence, timestamp = HEADER.unpack_from(frame)
     (value,) = struct.unpack_from(">f", frame, HEADER.size)
     return Measurand(name=name, value=value, timestamp=timestamp)
+
+
+def checksum_ok(frame: bytes) -> bool:
+    """Verify the trailing 16-bit sum carried by *frame*.
+
+    The last two bytes hold the sum of every preceding byte, truncated to 16
+    bits. A frame too short to carry a checksum is not valid.
+    """
+    if len(frame) < HEADER.size + CHECKSUM.size:
+        return False
+    body, trailer = frame[:-CHECKSUM.size], frame[-CHECKSUM.size:]
+    (declared,) = CHECKSUM.unpack(trailer)
+    return declared == (sum(body) & 0xFFFF)
