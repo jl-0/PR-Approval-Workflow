@@ -50,3 +50,19 @@ def test_checksum_rejects_a_truncated_frame():
     from aurora.decode import checksum_ok
 
     assert checksum_ok(b"\x00\x01") is False
+
+
+def test_high_payload_apid_decodes():
+    result = decode(frame(0x0512, 3.5), {0x512: "payload_temp"})
+    assert result.name == "payload_temp"
+
+
+def test_dictionary_keyed_on_the_raw_word_still_resolves():
+    # 0x0842 masks down to APID 0x042 but the payload team ships the raw key.
+    result = decode(frame(0x0842, 7.0), {0x0842: "payload_current"})
+    assert result.name == "payload_current"
+
+
+def test_error_names_both_forms_of_the_identifier():
+    with pytest.raises(DecodeError, match="0x0512"):
+        decode(frame(0x0512, 1.0), {})

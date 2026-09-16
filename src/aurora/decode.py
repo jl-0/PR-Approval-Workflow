@@ -30,12 +30,20 @@ def apid_of(frame: bytes) -> int:
 
 
 def decode(frame: bytes, dictionary: dict[int, str]) -> Measurand:
-    """Decode a single frame using *dictionary* to name the measurand."""
+    """Decode a single frame using *dictionary* to name the measurand.
+
+    Dictionary keys may be written with or without the version and type bits
+    that share the first header word; both forms resolve to the same measurand.
+    """
     apid = apid_of(frame)
+    identifier, _sequence, timestamp = HEADER.unpack_from(frame)
     name = dictionary.get(apid)
     if name is None:
-        raise DecodeError(f"no dictionary entry for APID {apid}")
-    _identifier, _sequence, timestamp = HEADER.unpack_from(frame)
+        # Payload subsystems publish dictionaries with the raw first word as
+        # the key, so retry against the unmasked identifier before giving up.
+        name = dictionary.get(identifier)
+    if name is None:
+        raise DecodeError(f"no dictionary entry for APID {apid} (raw {identifier:#06x})")
     (value,) = struct.unpack_from(">f", frame, HEADER.size)
     return Measurand(name=name, value=value, timestamp=timestamp)
 
