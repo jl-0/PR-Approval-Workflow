@@ -61,3 +61,24 @@ def test_dedupe_window_is_bounded():
     # "a" has fallen out of the window, so it is no longer seen as a duplicate.
     assert queue.offer(b"a") is True
     assert queue.offer(b"c") is False
+
+
+def test_discard_summary_reports_count_and_proportion():
+    queue = FrameQueue(GatewayConfig(queue_depth=4, strict_checksums=False))
+    for payload in (b"a", b"a", b"b", b"c"):
+        queue.offer(payload)
+    summary = queue.discard_summary()
+    assert summary["offered"] == 4
+    assert summary["discarded"] == 1
+    assert summary["proportion"] == 0.25
+    assert summary["by_reason"]["duplicate"] == 1
+
+
+def test_discard_summary_on_an_idle_queue_does_not_divide_by_zero():
+    summary = FrameQueue().discard_summary()
+    assert summary == {
+        "offered": 0,
+        "discarded": 0,
+        "proportion": 0.0,
+        "by_reason": {"duplicate": 0, "checksum": 0, "queue_full": 0},
+    }
