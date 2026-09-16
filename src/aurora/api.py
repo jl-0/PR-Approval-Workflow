@@ -21,3 +21,20 @@ class MeasurandStore:
 
     def names(self) -> list[str]:
         return sorted(self._latest)
+
+    def snapshot(self) -> dict[str, Measurand]:
+        """Return every current value in one pass.
+
+        Dashboards previously issued one lookup per measurand, which meant a
+        read could observe a mix of values from either side of an update. A
+        snapshot is taken from a single copy of the mapping instead.
+        """
+        return dict(self._latest)
+
+    def stale(self, now: int, max_age: int) -> list[str]:
+        """Names whose newest value is older than *max_age* seconds."""
+        return sorted(
+            name
+            for name, measurand in self._latest.items()
+            if now - measurand.timestamp > max_age
+        )
