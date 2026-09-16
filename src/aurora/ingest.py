@@ -28,6 +28,9 @@ class FrameQueue:
     def __init__(self, config: GatewayConfig | None = None) -> None:
         self._config = config or GatewayConfig()
         self._frames: deque[bytes] = deque(maxlen=self._config.queue_depth)
+        # The dedupe window is bounded: an unbounded set grew for the lifetime
+        # of the process and was the largest allocation in a long pass.
+        self._seen_order: deque[bytes] = deque(maxlen=self._config.queue_depth)
         self._seen: set[bytes] = set()
         self.dropped = 0
         self.rejected = 0
@@ -50,9 +53,16 @@ class FrameQueue:
         if len(self._frames) == self._frames.maxlen:
             self.dropped += 1
             self.drops[DropReason.QUEUE_FULL] += 1
-        self._seen.add(frame)
+        self._remember(frame)
         self._frames.append(frame)
         return True
+
+    def _remember(self, frame: bytes) -> None:
+        """Record *frame* in the dedupe window, evicting the oldest entry."""
+        if len(self._seen_order) == self._seen_order.maxlen:
+            self._seen.discard(self._seen_order[0])
+        self._seen_order.append(frame)
+        self._seen.add(frame)
 
     def drain(self) -> Iterator[bytes]:
         while self._frames:
