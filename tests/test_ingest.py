@@ -3,14 +3,16 @@ from aurora.ingest import FrameQueue
 
 
 def test_duplicate_frames_are_rejected():
-    queue = FrameQueue()
+    # These two predate checksum enforcement and use opaque payloads, so they
+    # exercise the queue rather than the validator.
+    queue = FrameQueue(GatewayConfig(strict_checksums=False))
     assert queue.offer(b"abc") is True
     assert queue.offer(b"abc") is False
     assert len(queue) == 1
 
 
 def test_queue_drops_oldest_when_full():
-    queue = FrameQueue(GatewayConfig(queue_depth=2))
+    queue = FrameQueue(GatewayConfig(queue_depth=2, strict_checksums=False))
     for payload in (b"a", b"b", b"c"):
         queue.offer(payload)
     assert queue.dropped == 1
