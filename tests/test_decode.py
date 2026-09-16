@@ -26,3 +26,27 @@ def test_short_frame_is_rejected():
 def test_unknown_apid_is_rejected():
     with pytest.raises(DecodeError):
         decode(frame(0x0099, 1.0), {})
+
+
+def checked(payload: bytes) -> bytes:
+    return payload + struct.pack(">H", sum(payload) & 0xFFFF)
+
+
+def test_checksum_accepts_a_well_formed_frame():
+    from aurora.decode import checksum_ok
+
+    assert checksum_ok(checked(frame(0x42, 1.0))) is True
+
+
+def test_checksum_rejects_a_corrupted_frame():
+    from aurora.decode import checksum_ok
+
+    corrupt = bytearray(checked(frame(0x42, 1.0)))
+    corrupt[4] ^= 0xFF
+    assert checksum_ok(bytes(corrupt)) is False
+
+
+def test_checksum_rejects_a_truncated_frame():
+    from aurora.decode import checksum_ok
+
+    assert checksum_ok(b"\x00\x01") is False
