@@ -50,3 +50,12 @@ def test_drop_report_accounts_for_every_reason():
 def test_drop_report_lists_unseen_reasons_as_zero():
     queue = FrameQueue(GatewayConfig(strict_checksums=False))
     assert queue.drop_report() == {"duplicate": 0, "checksum": 0, "queue_full": 0}
+
+
+def test_dedupe_window_is_bounded():
+    queue = FrameQueue(GatewayConfig(queue_depth=2, strict_checksums=False))
+    for payload in (b"a", b"b", b"c"):
+        queue.offer(payload)
+    # "a" has fallen out of the window, so it is no longer seen as a duplicate.
+    assert queue.offer(b"a") is True
+    assert queue.offer(b"c") is False
