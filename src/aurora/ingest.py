@@ -35,6 +35,7 @@ class FrameQueue:
         self.dropped = 0
         self.rejected = 0
         self.drops: Counter[DropReason] = Counter()
+        self.offered = 0
 
     def offer(self, frame: bytes) -> bool:
         """Accept *frame*; return False if it was rejected.
@@ -43,6 +44,7 @@ class FrameQueue:
         strict checksums — when its trailing sum does not verify. Rejected
         frames never reach the store.
         """
+        self.offered += 1
         if frame in self._seen:
             self.drops[DropReason.DUPLICATE] += 1
             return False
@@ -78,3 +80,17 @@ class FrameQueue:
         reads as "measured, none occurred".
         """
         return {reason.value: self.drops[reason] for reason in DropReason}
+
+    def discard_summary(self) -> dict[str, object]:
+        """One figure an operator can put in a pass report.
+
+        Reports the proportion as well as the count: "412 frames discarded"
+        means nothing without knowing whether 500 or 500,000 were offered.
+        """
+        discarded = sum(self.drops.values())
+        return {
+            "offered": self.offered,
+            "discarded": discarded,
+            "proportion": discarded / self.offered if self.offered else 0.0,
+            "by_reason": self.drop_report(),
+        }
