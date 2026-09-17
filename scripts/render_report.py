@@ -273,6 +273,8 @@ def render_markdown(
             "",
             "## Work items this closes"
             if is_pull_request(payload)
+            else "## Work items these close"
+            if is_queued(payload)
             else "## Work items closed",
             "",
             "| Issue | Title | Tags | Delivered by |",
@@ -528,6 +530,8 @@ def render_html(
             parts += [
                 "<h2>Work items this closes</h2>"
                 if single
+                else "<h2>Work items these close</h2>"
+                if is_queued(payload)
                 else "<h2>Work items closed</h2>",
                 "<div class='table-scroll'><table><thead><tr>"
                 "<th>Issue</th><th>Title</th><th>Tags</th><th>Delivered by</th>"

@@ -121,7 +121,10 @@ jobs:
             # Re-read the head SHA rather than trusting the collected one: if
             # the author pushed during the review, the approval must not
             # silently apply to code nobody looked at.
-            current="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
+            # --repo is required: this job has no checkout, so gh cannot
+            # infer the repository from a working directory.
+            current="$(gh pr view "$pr" --repo "${{ github.repository }}" \
+              --json headRefOid --jq .headRefOid)"
             if [ "$current" != "$reviewed" ]; then
               echo "::warning::PR #$pr moved from $reviewed to $current during review; leaving it queued."
               skipped=$((skipped + 1))
