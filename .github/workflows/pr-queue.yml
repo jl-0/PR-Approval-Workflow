@@ -1,0 +1,42 @@
+name: Queue for sign-off
+
+# Marks every pull request as awaiting the next sign-off batch. This posts a
+# *pending* commit status and nothing else: no environment, no gate, no
+# notification. The reviewer is not involved until the batch runs.
+#
+# The branch rule requires the manager-signoff status to pass, so a pending
+# status is what actually holds the pull request. It also gives the author a
+# visible reason on the PR rather than an unexplained blocked merge button.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: pr-queue-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  queue:
+    name: Queue for sign-off
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Mark the head commit as awaiting sign-off
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # A new push produces a new SHA with no status, so re-pushing after
+          # approval correctly puts the pull request back in the queue.
+          gh api -X POST "repos/${{ github.repository }}/statuses/$SHA" \
+            -f state=pending \
+            -f context=manager-signoff \
+            -f description="Queued for the next sign-off batch" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/workflows/batch-signoff.yml" \
+            --silent
+          echo "PR #${{ github.event.pull_request.number }} queued at $SHA"
