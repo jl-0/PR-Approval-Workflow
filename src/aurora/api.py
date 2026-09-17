@@ -19,6 +19,16 @@ class MeasurandStore:
     def latest(self, name: str) -> Measurand | None:
         return self._latest.get(name)
 
+    def age_of(self, name: str, now: int) -> int | None:
+        """Seconds since *name* last updated, or None if never seen.
+
+        Returned alongside a value so a caller cannot mistake a stale reading
+        for a current one — the difference between "nominal" and "we lost the
+        link" is otherwise invisible.
+        """
+        measurand = self._latest.get(name)
+        return None if measurand is None else now - measurand.timestamp
+
     def names(self) -> list[str]:
         return sorted(self._latest)
 

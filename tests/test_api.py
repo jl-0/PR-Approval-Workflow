@@ -38,3 +38,13 @@ def test_stale_lists_only_old_measurands():
     store.record(Measurand("fresh", 1.0, 100))
     store.record(Measurand("old", 1.0, 10))
     assert store.stale(now=120, max_age=30) == ["old"]
+
+
+def test_age_of_reports_seconds_since_update():
+    store = MeasurandStore()
+    store.record(Measurand("bus_voltage", 28.0, 100))
+    assert store.age_of("bus_voltage", now=160) == 60
+
+
+def test_age_of_unknown_measurand_is_none():
+    assert MeasurandStore().age_of("nope", now=1) is None
