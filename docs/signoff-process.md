@@ -59,31 +59,32 @@ able to approve their own batch.
 
 ## The summary at the top of the report
 
-Every report opens with a short bulleted overview: how much merged, what needs a
-closer look, what the batch consists of, and which pull requests closed no
+Every report opens with a short bulleted overview: how much is waiting, what
+needs a closer look, what the batch consists of, and which pull requests close no
 tracked work item. That last point is the traceability question an assessor
 asks, so it is stated rather than left to be noticed.
 
 This is derived directly from the pull request data — no model, no network, no
-cost, nothing to configure. It is always present.
+cost, nothing to configure. It is always what the report carries.
 
-### Turning on a written summary (optional)
+### Why there is no AI-written summary
 
-A model can write that overview in prose instead.
+There was one, briefly. It called **GitHub Models**, which was free on public
+repositories with only `models: read` in the job's permissions. That endpoint was
+**retired on 30 July 2026** and now returns `410`. Its replacement is Copilot
+CLI, which needs a token belonging to an account with a Copilot licence, so
+there is no free path any more.
 
-The free option is gone: **GitHub Models was retired on 30 July 2026**, taking
-the free `models: read` inference endpoint with it. Its replacement is Copilot
-CLI, which needs a token belonging to an account with Copilot access.
+The workflow therefore contains **no model step, and no secret that enables
+one**. `collect_prs.py` still writes a model-ready brief to `build/prompt.txt`,
+which ships in the run artifact, so adding a model later is small: feed that
+file to whatever you use and pass the reply to `render_report.py --narrative`.
+The renderer already handles a supplied narrative and labels the report with
+which kind of summary it carries.
 
-To enable it, add a repository secret named `COPILOT_PAT` holding a personal
-access token for an account with Copilot. The workflow detects the secret and
-uses it; with no secret, the steps are skipped entirely and the derived summary
-is used instead.
-
-Both the Copilot step and its install step are `continue-on-error`, and the
-report labels which kind of summary it carries. A quota exhaustion or an outage
-degrades the wording of one paragraph — it never blocks a sign-off, and the
-tables come straight from GitHub's API either way.
+If you do add one, keep the step `continue-on-error`. A quota exhaustion should
+degrade one paragraph of wording, never block a sign-off — the tables come
+straight from GitHub's API and are complete without it.
 
 ## How the gate works
 
