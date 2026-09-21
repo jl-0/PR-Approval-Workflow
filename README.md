@@ -115,10 +115,16 @@ of, and which pull requests close no tracked work item. That last point is the
 traceability question an assessor asks, so it is stated rather than left to be
 noticed.
 
-No model is involved and it costs nothing. GitHub Models — the free inference
-endpoint — was retired on 30 July 2026. A Copilot-written summary can be
-switched on by adding a `COPILOT_PAT` secret; without it those steps skip
-entirely.
+No model is involved, and that is not configurable: the summary is **always**
+the derived one. GitHub Models, the free inference endpoint that made an
+AI-written summary practical, was retired on 30 July 2026, and its replacement
+needs a Copilot licence — so there is no model step in the workflow and no
+secret that switches one on.
+
+`collect_prs.py` does still write a model-ready brief to `build/prompt.txt`,
+which rides along in the run artifact. Wiring a model in later is a small
+change: feed that file to whatever you use, and pass the reply to
+`render_report.py --narrative`. Nothing does that today.
 
 ## Setting this up on your own repository
 
@@ -151,6 +157,12 @@ gh api -X PATCH "repos/$REPO" -F allow_auto_merge=true
 
 Then copy `.github/workflows/pr-queue.yml`, `.github/workflows/batch-signoff.yml`
 and `scripts/` across.
+
+**The `Unit tests` context in step 2 must match a job that actually runs on your
+pull requests** — here it is the `name:` of the job in `ci.yml`. A required check
+that nothing ever reports blocks every pull request forever, so either copy
+`ci.yml` too, change that context to your own CI job's name, or drop it and
+require only `manager-signoff`.
 
 ### Adding or changing the reviewer
 
@@ -188,12 +200,21 @@ someone to press Merge — unless auto-merge was armed on it beforehand, in whic
 case it merges itself the moment the batch releases it.
 
 **Auto-merge needs a required status check.** GitHub refuses to arm auto-merge on
-a ruleset that only requires deployments, so the `Unit tests` entry is load
-bearing, not decoration.
+a branch whose rules require only *deployments*; an earlier version of this setup
+hit exactly that. It does not bite the current ruleset, which requires two status
+checks, but it is worth knowing before swapping the mechanism.
 
-**Fork pull requests** get a read-only token and no secrets. The queue status
-still posts, but do not add secrets to that job without understanding
-`pull_request_target`.
+**Fork pull requests do not get the queue marker.** A `pull_request` workflow
+triggered from a fork receives a read-only token whatever its `permissions` block
+says, so `pr-queue.yml` cannot post the pending status and that step fails.
+
+Nothing unsafe follows from this: the pull request is still blocked, because the
+required `manager-signoff` check simply never reports, and the batch still
+collects and releases it — the batch runs in the base repository with full
+permissions. The author just sees *"Expected — waiting for status to be
+reported"* instead of the friendly reason. Do not reach for
+`pull_request_target` to fix the cosmetics without understanding what it
+exposes.
 
 **Notifications are GitHub's**, and depend on the reviewer's own settings. You
 will not see them yourself while testing, because GitHub suppresses
