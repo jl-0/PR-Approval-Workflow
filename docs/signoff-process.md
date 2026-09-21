@@ -20,6 +20,15 @@ What that gate then does is flip a commit status on each reviewed pull request,
 and a branch rule requires that status. So one approval releases many pull
 requests.
 
+### Where the report lives
+
+On the **run summary**, which GitHub renders above the paused job. Not on GitHub
+Pages: `actions/deploy-pages` publishes an artifact that becomes the entire
+site, and a repository only gets one, so publishing reports there would destroy
+any project site the repository serves — on every run. The rendered HTML is
+attached to the run as an artifact instead. A durable hosted page, if you want
+one, belongs in a separate reports repository under dated paths.
+
 ## What the reviewer sees
 
 They get one email per cycle: *"Deployment review required."* It links to the
@@ -27,9 +36,7 @@ workflow run, where they find:
 
 1. The **report** rendered directly on the page, above the paused job — every
    pull request waiting, the work items they close, and all their tags.
-2. A link to the same report as a **GitHub Pages site**, if they prefer a clean
-   page.
-3. A **Review deployments** button. They tick `external-signoff`, optionally
+2. A **Review deployments** button. They tick `external-signoff`, optionally
    leave a comment, and press **Approve and deploy** or **Reject**.
 
 Approval releases every pull request in that report. Rejection fails the job,
@@ -90,10 +97,9 @@ PR opened ──► Queue for sign-off posts a PENDING manager-signoff status
    ...PRs accumulate through the week...
 
 Monday 14:00 UTC (or you trigger it) ──► Batch sign-off
-   collect ──► publish to Pages ──► signoff  ← ONE approval, all PRs
-                                       │
-                                       └──► flips every reviewed PR's
-                                            manager-signoff to success
+   collect ──► signoff  ← ONE approval, all PRs
+                  │
+                  └──► flips every reviewed PR's manager-signoff to success
 ```
 
 ### What holds a pull request
@@ -111,9 +117,13 @@ than an unexplained blocked merge button.
 ### What the reviewer does
 
 Once a cycle they get one notification for one workflow run. They read the
-report — on the run summary, or as the [Pages site](https://jl-0.github.io/PR-Approval-Workflow/)
-linked beside it — and approve `external-signoff` once. Every pull request in
-that report becomes mergeable.
+report on the run summary — GitHub renders it directly above the paused job —
+and approve `external-signoff` once. Every pull request in that report becomes
+mergeable.
+
+Mergeable, not merged: clearing the gate does not press the button. A pull
+request with auto-merge armed will merge itself; otherwise someone still has to
+merge it.
 
 If nothing is queued, the `signoff` job is skipped entirely and nobody is
 disturbed.

@@ -209,7 +209,9 @@ def render_markdown(
             f"**Target branch:** `{payload['base']}` &nbsp;·&nbsp; "
             f"{pretty_date(payload['generated_at'])}",
             "",
-            f"**{len(prs)} {plural(len(prs), 'pull request')}** "
+            "Nothing is queued for sign-off."
+            if not prs
+            else f"**{len(prs)} {plural(len(prs), 'pull request')}** "
             f"{plural(len(prs), 'is', 'are')} ready to merge and held until you "
             "approve. Approving releases "
             f"{plural(len(prs), 'it', 'all of them')} at once.",
@@ -241,11 +243,12 @@ def render_markdown(
         lines += ["## Summary", "", narrative, "", f"<sub>{origin}</sub>", ""]
 
     if not prs:
-        lines += [
-            "> Nothing merged in this window. Approving records a no-change "
-            "sign-off for the period.",
-            "",
-        ]
+        if not is_queued(payload):
+            lines += [
+                "> Nothing merged in this window. Approving records a "
+                "no-change sign-off for the period.",
+                "",
+            ]
         return "\n".join(lines)
 
     lines += [
@@ -501,7 +504,10 @@ def render_html(
 
     if not prs:
         parts.append(
-            "<div class='empty'>No changes merged in this window. "
+            "<div class='empty'>No pull requests are waiting for sign-off, "
+            "so there is nothing to approve.</div>"
+            if is_queued(payload)
+            else "<div class='empty'>No changes merged in this window. "
             "Approving records a no-change sign-off for the period.</div>"
         )
     else:

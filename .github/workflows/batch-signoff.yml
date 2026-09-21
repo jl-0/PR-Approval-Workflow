@@ -1,16 +1,20 @@
 name: Batch sign-off
 
 # Collects every pull request waiting for sign-off, builds one report covering
-# all of them, publishes it as a GitHub Pages site, and asks for ONE approval.
-# On approval each pull request's manager-signoff status flips to success and
-# they all become mergeable together.
+# all of them, and asks for ONE approval. On approval each pull request's
+# manager-signoff status flips to success and they all become mergeable together.
 #
 # Runs weekly, or on demand. There is no per-pull-request notification: the
 # reviewer hears from this repository once a cycle rather than once a change.
 #
-# collect and publish are separate jobs from signoff on purpose — an environment
-# gate pauses a job before its first step, so a report built inside the gated
-# job could not be read until after approving it.
+# The report goes to the run summary, which GitHub renders directly above the
+# Approve button — deliberately NOT to GitHub Pages. A Pages deployment replaces
+# the whole site, and a repository only gets one, so publishing reports there
+# would destroy any project site the repository already serves.
+#
+# collect is a separate job from signoff on purpose — an environment gate pauses
+# a job before its first step, so a report built inside the gated job could not
+# be read until after approving it.
 
 on:
   schedule:
@@ -58,44 +62,24 @@ jobs:
           python3 scripts/render_report.py \
             --data build/prs.json \
             --markdown-out build/summary.md \
-            --html-out site/index.html \
-            --page-url "${{ format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}" \
+            --html-out build/report.html \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Publish the report to the run summary
         run: cat build/summary.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Keep the raw data as an artifact
+      # The rendered HTML rides along here for anyone who wants a standalone
+      # copy. It is not hosted; see the note at the top of this file.
+      - name: Keep the report and raw data as an artifact
         uses: actions/upload-artifact@v4
         with:
           name: batch-signoff-report
           path: build/
           retention-days: 90
 
-      - name: Package the page
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/
-
-  publish:
-    name: Publish the report page
-    needs: collect
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    outputs:
-      page_url: ${{ steps.deploy.outputs.page_url }}
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v4
-
   signoff:
     name: Manager sign-off
-    needs: [collect, publish]
+    needs: collect
     # Nothing queued means nothing to approve; do not wake the reviewer.
     if: needs.collect.outputs.pr_count != '0'
     runs-on: ubuntu-latest
@@ -104,7 +88,7 @@ jobs:
     # The gate. One approval, covering every pull request in the report above.
     environment:
       name: external-signoff
-      url: ${{ needs.publish.outputs.page_url || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Release the approved pull requests
         env:
