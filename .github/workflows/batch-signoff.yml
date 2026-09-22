@@ -32,7 +32,10 @@ concurrency:
 jobs:
   collect:
     name: Build the sign-off report
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: that label migrates to Ubuntu 26 on
+    # 19 October 2026, and a sign-off gate is the wrong place to discover a
+    # runner image changed underneath you. Bump this deliberately.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -42,7 +45,7 @@ jobs:
       pr_count: ${{ steps.collect.outputs.pr_count }}
       pr_shas: ${{ steps.collect.outputs.pr_shas }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Collect the pull requests awaiting sign-off
         id: collect
@@ -71,7 +74,7 @@ jobs:
       # The rendered HTML rides along here for anyone who wants a standalone
       # copy. It is not hosted; see the note at the top of this file.
       - name: Keep the report and raw data as an artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: batch-signoff-report
           path: build/
@@ -82,7 +85,7 @@ jobs:
     needs: collect
     # Nothing queued means nothing to approve; do not wake the reviewer.
     if: needs.collect.outputs.pr_count != '0'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       statuses: write
     # The gate. One approval, covering every pull request in the report above.
