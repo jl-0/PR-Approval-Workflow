@@ -204,6 +204,14 @@ a branch whose rules require only *deployments*; an earlier version of this setu
 hit exactly that. It does not bite the current ruleset, which requires two status
 checks, but it is worth knowing before swapping the mechanism.
 
+**Runners and actions are pinned, so they need bumping.** Jobs run on
+`ubuntu-24.04` rather than `ubuntu-latest`, because that label migrates to
+Ubuntu 26 on 19 October 2026 and a sign-off gate is the wrong place to discover
+the image changed underneath you. Actions are pinned to majors that run on
+Node 24 (`checkout@v7`, `setup-python@v7`, `upload-artifact@v7`), since Node 20
+is deprecated on GitHub runners. Both are deliberate choices that trade
+automatic updates for no surprises — review them once or twice a year.
+
 **Fork pull requests do not get the queue marker.** A `pull_request` workflow
 triggered from a fork receives a read-only token whatever its `permissions` block
 says, so `pr-queue.yml` cannot post the pending status and that step fails.
